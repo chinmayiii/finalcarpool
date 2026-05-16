@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - Corporate Carpool</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  </head>
+  <body>
+    <main class="container">
+      <p class="eyebrow">Ride Operations</p>
+      <h1>Dashboard</h1>
+
+      <section class="dashboard-grid">
+        <div class="dashboard-card">
+          <h3>Offer Ride</h3>
+          <p>Post your route and available seats for teammates.</p>
+          <form id="offerRideForm" class="offer-form">
+            <input id="offerSource" type="text" placeholder="Pickup location" required />
+            <input id="offerDestination" type="text" placeholder="Drop location" required />
+            <button class="btn btn-green" type="submit">Offer &amp; Show Route</button>
+          </form>
+        </div>
+        <div class="dashboard-card">
+          <h3>Find Ride</h3>
+          <p>Search available office rides and reserve your seat.</p>
+        </div>
+      </section>
+
+      <section class="dashboard-list">
+        <h2>Available Rides</h2>
+        <form id="nearbyForm" class="nearby-form">
+          <input id="lng" type="number" step="any" placeholder="Longitude (e.g. 77.5946)" required />
+          <input id="lat" type="number" step="any" placeholder="Latitude (e.g. 12.9716)" required />
+          <input id="maxDistance" type="number" placeholder="Radius in meters (default 5000)" />
+          <div class="nearby-actions">
+            <button class="btn btn-primary" type="submit">Find Nearby</button>
+            <button id="loadAll" class="btn btn-secondary" type="button">Show All Rides</button>
+            <button id="logoutBtn" class="btn btn-secondary" type="button">Logout</button>
+          </div>
+        </form>
+        <ul id="ridesList"></ul>
+      </section>
+
+      <section class="dashboard-list map-section hidden-map" id="rideMapSection">
+        <h2>Ride Route Preview</h2>
+        <form id="routeForm" class="nearby-form route-form">
+          <input id="sourceInput" type="text" placeholder="Enter pickup/source location" required />
+          <input id="destinationInput" type="text" placeholder="Enter drop/destination location" required />
+          <div class="nearby-actions">
+            <button class="btn btn-primary" type="submit">Show Route</button>
+          </div>
+        </form>
+        <div class="route-metrics">
+          <span>Distance: <strong id="routeDistance">--</strong></span>
+          <span>ETA: <strong id="routeDuration">--</strong></span>
+        </div>
+        <p id="mapMessage" class="map-message">Loading map...</p>
+        <div id="routeMap"></div>
+      </section>
+
+      <div class="inline-links"><a href="index.html">Back Home</a></div>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="utils.js"></script>
+    <script>
+      requireAuth();
+
+      const API_BASE        = window.location.origin;
+      const ridesList       = document.getElementById("ridesList");
+      const rideMapSection  = document.getElementById("rideMapSection");
+      const sourceInput     = document.getElementById("sourceInput");
+      const destinationInput= document.getElementById("destinationInput");
+      const routeDistance   = document.getElementById("routeDistance");
+      const routeDuration   = document.getElementById("routeDuration");
+      const mapMessage      = document.getElementById("mapMessage");
+
+      let map, routePolyline, movementMarker, movementTimer;
+
+      const renderRides = (data) => {
+        if (!Array.isArray(data) || !data.length) {
+          ridesList.innerHTML = "<li>No rides available right now.</li>"; return;
+        }
+        ridesList.innerHTML = data.map((ride) =>
+          `<li><strong>${ride.source || "Unknown"} → ${ride.destination || "Unknown"}</strong>
+           | Rider: ${ride.riderName || "N/A"} | Seats: ${ride.seatsAvailable ?? "N/A"}
+           | Vehicle: ${ride.vehicleDetails || "N/A"}</li>`
+        ).join("");
+      };
+
+      const safeFetch = (url) =>
+        fetch(url, { headers: authHeaders() }).then((res) => {
+          if (res.status === 401 || res.status === 403) {
+            localStorage.clear(); window.location.href = "login.html"; return null;
+          }
+          return res.json();
+        });
+
+      const loadAllRides = () =>
+        safeFetch(`${API_BASE}/api/rides`)
+          .then((data) => { if (data) renderRides(data); })
+          .catch(() => { ridesList.innerHTML = "<li>Failed to load rides.</li>"; });
+
+      document.getElementById("nearbyForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const query = new URLSearchParams({
+          lng: document.getElementById("lng").value,
+          lat: document.getElementById("lat").value,
+          maxDistance: document.getElementById("maxDistance").value || "5000"
+        });
+        safeFetch(`${API_BASE}/api/rides/nearby?${query.toString()}`)
+          .then((data) => { if (data) renderRides(data); })
+          .catch(() => { ridesList.innerHTML = "<li>Failed to load nearby rides.</li>"; });
+      });
+
+      document.getElementById("loadAll").addEventListener("click", loadAllRides);
+      document.getElementById("logoutBtn").addEventListener("click", () => {
+        localStorage.clear(); window.location.href = "login.html";
+      });
+      loadAllRides();
+
+      const setMapMessage = (msg) => { mapMessage.textContent = msg; };
+
+      const clearAnim = () => {
+        if (movementTimer) { clearInterval(movementTimer); movementTimer = null; }
+        if (movementMarker) { movementMarker.remove(); movementMarker = null; }
+      };
+
+      const animateRide = (path) => {
+        clearAnim();
+        if (!path || path.length < 2) return;
+        movementMarker = L.circleMarker(path[0], {
+          radius: 8, color: "#14532d", fillColor: "#16a34a", fillOpacity: 1, weight: 2
+        }).addTo(map);
+        let i = 0;
+        movementTimer = setInterval(() => {
+          i++;
+          if (i >= path.length) { clearAnim(); setMapMessage("Ride reached destination."); return; }
+          movementMarker.setLatLng(path[i]);
+        }, 450);
+      };
+
+      const drawRoute = async (originText, destText) => {
+        try {
+          const origin = await geocodePlace(originText);
+          const dest   = await geocodePlace(destText);
+          const route  = await fetchRoute(origin, dest);
+          if (routePolyline) routePolyline.remove();
+          routePolyline = L.polyline(route.coordinates, { color: "#2563eb", weight: 5 }).addTo(map);
+          map.fitBounds(routePolyline.getBounds(), { padding: [30, 30] });
+          routeDistance.textContent = formatDistance(route.distance);
+          routeDuration.textContent = formatDuration(route.duration);
+          setMapMessage("Showing ride movement from pickup to drop.");
+          animateRide(route.coordinates);
+        } catch (err) { setMapMessage(err.message || "Could not calculate route."); }
+      };
+
+      document.getElementById("routeForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (!map) { setMapMessage("Map still loading."); return; }
+        drawRoute(sourceInput.value.trim(), destinationInput.value.trim());
+      });
+
+      document.getElementById("offerRideForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (!map) { setMapMessage("Map still loading."); return; }
+        const origin = document.getElementById("offerSource").value.trim();
+        const dest   = document.getElementById("offerDestination").value.trim();
+        sourceInput.value = origin; destinationInput.value = dest;
+        rideMapSection.classList.remove("hidden-map");
+        rideMapSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        drawRoute(origin, dest);
+      });
+
+      map = L.map("routeMap").setView([OFFICE_LOCATION.lat, OFFICE_LOCATION.lng], 12);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+      }).addTo(map);
+      L.marker([OFFICE_LOCATION.lat, OFFICE_LOCATION.lng]).addTo(map).bindPopup("Corporate Office");
+      setMapMessage("Map ready. Enter source and destination to view ride movement.");
+    </script>
+  </body>
+</html>

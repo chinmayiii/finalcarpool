@@ -1,0 +1,14 @@
+[build]
+# Railway auto-detects Node.js and runs `npm install` then `npm start`.
+# This file pins explicit build/start commands for reliability.
+builder     = "NIXPACKS"
+buildCommand = "npm install && npm --prefix server install --omit=dev"
+
+[deploy]
+startCommand  = "node server/server.js"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Health-check: Railway will restart the service if /health stops responding
+healthcheckPath    = "/health"
+healthcheckTimeout = 30

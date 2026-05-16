@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Register - Corporate Carpool</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <p class="eyebrow">Create Account</p>
+      <h1>Register</h1>
+      <form id="registerForm" class="auth-form">
+        <input id="name" type="text" placeholder="Full Name" required />
+        <input id="email" type="email" placeholder="Work Email" required />
+        <input id="mobileNumber" type="tel" placeholder="Mobile Number (10 digits)" pattern="\d{10}" required />
+        <input id="companyId" type="text" placeholder="Company ID" required />
+        <input id="location" type="text" placeholder="Location" required />
+        <select id="role" required>
+          <option value="">Select role</option>
+          <option value="traveler">Traveler</option>
+          <option value="rider">Rider (Driver)</option>
+        </select>
+
+        <section id="riderFields" class="dashboard-list hidden-map rider-fields">
+          <h2>Rider Verification</h2>
+          <input id="aadhaarNumber" type="text" placeholder="Aadhaar Number (12 digits)" pattern="\d{12}" title="Aadhaar must be exactly 12 digits" />
+          <input id="vehicleNumber" type="text" placeholder="Vehicle Number (e.g. KA01AB1234)" pattern="[A-Za-z]{2}\d{2}[A-Za-z]{1,2}\d{4}" title="Use format like KA01AB1234" />
+          <input id="vehicleModel" type="text" placeholder="Vehicle Model" />
+          <input id="drivingLicenseNumber" type="text" placeholder="Driving License Number" pattern="[A-Za-z0-9]{10,20}" title="License must be 10 to 20 letters/numbers" />
+        </section>
+
+        <input id="password" type="password" placeholder="Password (min 8 characters)" required />
+        <input id="confirmPassword" type="password" placeholder="Confirm Password" required />
+        <button class="btn btn-primary" type="submit">Register</button>
+      </form>
+      <p id="registerStatus" class="map-message"></p>
+      <div class="inline-links">
+        <a href="login.html">Already have an account?</a>
+        <a href="index.html">Back Home</a>
+      </div>
+    </main>
+
+    <script>
+      const API_BASE = window.location.origin;
+      const roleSelect = document.getElementById("role");
+      const riderFields = document.getElementById("riderFields");
+      const registerForm = document.getElementById("registerForm");
+      const registerStatus = document.getElementById("registerStatus");
+
+      const riderInputs = [
+        document.getElementById("aadhaarNumber"),
+        document.getElementById("vehicleNumber"),
+        document.getElementById("vehicleModel"),
+        document.getElementById("drivingLicenseNumber")
+      ];
+
+      roleSelect.addEventListener("change", () => {
+        const isRider = roleSelect.value === "rider";
+        riderFields.classList.toggle("hidden-map", !isRider);
+        riderInputs.forEach((input) => {
+          input.required = isRider;
+        });
+      });
+
+      registerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const role = roleSelect.value;
+        const password = document.getElementById("password").value;
+        const confirmPassword = document.getElementById("confirmPassword").value;
+
+        if (password !== confirmPassword) {
+          registerStatus.textContent = "Passwords do not match. Please try again.";
+          return;
+        }
+
+        if (password.length < 8) {
+          registerStatus.textContent = "Password must be at least 8 characters.";
+          return;
+        }
+
+        const payload = {
+          name: document.getElementById("name").value.trim(),
+          email: document.getElementById("email").value.trim(),
+          mobileNumber: document.getElementById("mobileNumber").value.trim(),
+          companyId: document.getElementById("companyId").value.trim(),
+          location: document.getElementById("location").value.trim(),
+          password,
+          role
+        };
+
+        if (role === "rider") {
+          const aadhaar = document.getElementById("aadhaarNumber").value.trim().replace(/\s+/g, "");
+          const vehicleNumber = document.getElementById("vehicleNumber").value.trim().toUpperCase().replace(/\s+/g, "");
+          const drivingLicenseNumber = document
+            .getElementById("drivingLicenseNumber")
+            .value.trim()
+            .toUpperCase()
+            .replace(/\s+/g, "");
+
+          const aadhaarRegex = /^\d{12}$/;
+          const vehicleRegex = /^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$/;
+          const licenseRegex = /^[A-Z0-9]{10,20}$/;
+
+          if (!aadhaarRegex.test(aadhaar)) {
+            registerStatus.textContent = "Aadhaar must be exactly 12 digits.";
+            return;
+          }
+
+          if (!vehicleRegex.test(vehicleNumber)) {
+            registerStatus.textContent = "Vehicle number format invalid. Example: KA01AB1234.";
+            return;
+          }
+
+          if (!licenseRegex.test(drivingLicenseNumber)) {
+            registerStatus.textContent = "Driving license format invalid (10-20 letters/numbers).";
+            return;
+          }
+
+          payload.riderCredentials = {
+            aadhaarNumber: aadhaar,
+            vehicleNumber,
+            vehicleModel: document.getElementById("vehicleModel").value.trim(),
+            drivingLicenseNumber
+          };
+        }
+
+        try {
+          const response = await fetch(`${API_BASE}/api/auth/register`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || "Registration failed");
+          }
+
+          registerStatus.textContent = "Registration successful. Redirecting to login...";
+          setTimeout(() => {
+            window.location.href = `login.html?role=${role}`;
+          }, 900);
+        } catch (error) {
+          registerStatus.textContent = error.message || "Registration failed.";
+        }
+      });
+    </script>
+  </body>
+</html>

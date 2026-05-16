@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Traveler Dashboard - Corporate Carpool</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+  </head>
+  <body>
+    <main class="container">
+      <p class="eyebrow">Traveler Console</p>
+      <h1>Find Matching Riders</h1>
+      <p class="subtitle">Search rides on your path, send a request, and track route until destination.</p>
+
+      <section class="dashboard-list">
+        <h2>Search by Route</h2>
+        <form id="searchForm" class="nearby-form route-form">
+          <input id="travelerName"        type="text"  placeholder="Your name" required />
+          <input id="travelerEmail"       type="email" placeholder="Your email" required />
+          <input id="travelerSource"      type="text"  placeholder="Your pickup/source" required />
+          <input id="travelerDestination" type="text"  placeholder="Your destination" required />
+          <div class="nearby-actions">
+            <button class="btn btn-primary" type="submit">Find Riders On Same Way</button>
+            <button class="btn btn-secondary" type="button" id="logoutBtn">Logout</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="dashboard-list">
+        <h2>Matching Riders</h2>
+        <p id="requestStatus" class="map-message"></p>
+        <ul id="matchList"></ul>
+      </section>
+
+      <section class="dashboard-list map-section">
+        <h2>Trip Tracking</h2>
+        <div class="route-metrics">
+          <span>Distance Remaining: <strong id="routeDistance">--</strong></span>
+          <span>ETA Remaining: <strong id="routeDuration">--</strong></span>
+        </div>
+        <p id="mapMessage" class="map-message">Loading map...</p>
+        <div id="routeMap"></div>
+      </section>
+
+      <div class="inline-links">
+        <a href="index.html">Back Home</a>
+      </div>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <!-- FIX: shared utilities -->
+    <script src="utils.js"></script>
+    <script>
+      // Guard: only travelers may use this page — redirects to login if token is missing or role is wrong
+      requireRole("traveler");
+
+      // FIX: API_BASE uses window.location.origin — works in dev AND production
+      const API_BASE = window.location.origin;
+      const MATCH_DISTANCE_METERS = 1000;
+
+      const searchForm          = document.getElementById("searchForm");
+      const travelerNameEl      = document.getElementById("travelerName");
+      const travelerEmailEl     = document.getElementById("travelerEmail");
+      const travelerSourceEl    = document.getElementById("travelerSource");
+      const travelerDestEl      = document.getElementById("travelerDestination");
+      const matchList           = document.getElementById("matchList");
+      const requestStatus       = document.getElementById("requestStatus");
+      const routeDistanceEl     = document.getElementById("routeDistance");
+      const routeDurationEl     = document.getElementById("routeDuration");
+      const mapMessage          = document.getElementById("mapMessage");
+
+      let map, routePolyline, movementMarker, passengerMarker, officeMarker;
+      let activeRideId          = null;
+      let activeRequestId       = null;
+      let activeDestination     = null;
+      let remainingInFlight     = false;
+      let lastRemainingAt       = 0;
+
+      // FIX: Socket connects to same origin
+      const socket = window.io ? window.io(API_BASE, { auth: { token: getToken() } }) : null;
+
+      const setMapMessage = (msg) => { mapMessage.textContent = msg; };
+
+      const renderPolyline = (coords) => {
+        if (routePolyline) routePolyline.remove();
+        routePolyline = L.polyline(coords, { color: "#2563eb", weight: 5 }).addTo(map);
+        map.fitBounds(routePolyline.getBounds(), { padding: [30, 30] });
+      };
+
+      const ensurePassengerMarker = (pos) => {
+        if (!passengerMarker) {
+          passengerMarker = L.circleMarker([pos.lat, pos.lng], {
+            radius: 8, color: "#1e3a8a", fillColor: "#2563eb", fillOpacity: 1, weight: 2
+          }).addTo(map).bindTooltip("Passenger", { permanent: false });
+        } else {
+          passengerMarker.setLatLng([pos.lat, pos.lng]);
+        }
+      };
+
+      const updateRemaining = async (driverPos) => {
+        if (!activeDestination) return;
+        const now = Date.now();
+        if (remainingInFlight || now - lastRemainingAt < 4000) return;
+        remainingInFlight = true;
+        try {
+          const r = await fetchRoute(driverPos, activeDestination);
+          routeDistanceEl.textContent = formatDistance(r.distance);
+          routeDurationEl.textContent = formatDuration(r.duration);
+        } catch (e) { console.error(e); }
+        finally { remainingInFlight = false; lastRemainingAt = Date.now(); }
+      };
+
+      const bindLiveLocationUpdates = () => {
+        if (!socket) return;
+        socket.on("locationUpdate", (data) => {
+          // FIX: only received if traveler joined the correct ride room
+          if (!map || typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
+          const pos = { lat: data.lat, lng: data.lng };
+          if (!movementMarker) {
+            movementMarker = L.circleMarker([pos.lat, pos.lng], {
+              radius: 8, color: "#14532d", fillColor: "#16a34a", fillOpacity: 1, weight: 2
+            }).addTo(map).bindTooltip("Driver", { permanent: false });
+          } else {
+            movementMarker.setLatLng([pos.lat, pos.lng]);
+          }
+          updateRemaining(pos);
+          setMapMessage("Live driver location update received.");
+        });
+      };
+
+      const drawRouteMovement = async (srcText, dstText) => {
+        try {
+          const origin      = await geocodePlace(srcText);
+          const destination = await geocodePlace(dstText);
+          const route       = await fetchRoute(origin, destination);
+          activeDestination = destination;
+          ensurePassengerMarker(origin);
+          routeDistanceEl.textContent = formatDistance(route.distance);
+          routeDurationEl.textContent = formatDuration(route.duration);
+          renderPolyline(route.coordinates);
+          setMapMessage("Tracking route from pickup to destination.");
+        } catch (e) {
+          console.error(e);
+          setMapMessage(e.message || "Could not draw route.");
+        }
+      };
+
+      const encodeAttr = (str) =>
+        String(str || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      const loadMatches = async (source, destination) => {
+        try {
+          const srcCoord = await geocodePlace(source);
+          const dstCoord = await geocodePlace(destination);
+          const query = new URLSearchParams({
+            srcLat: srcCoord.lat,
+            srcLng: srcCoord.lng,
+            dstLat: dstCoord.lat,
+            dstLng: dstCoord.lng,
+            maxDistance: MATCH_DISTANCE_METERS
+          });
+          // FIX: send JWT token
+          const res   = await fetch(`${API_BASE}/api/rides/match?${query.toString()}`, { headers: authHeaders() });
+          const rides = await res.json();
+
+          if (!Array.isArray(rides) || !rides.length) {
+            matchList.innerHTML = "<li>No riders found on the same route right now.</li>";
+            return;
+          }
+
+          matchList.innerHTML = rides.map((ride) =>
+            `<li>
+              <strong>${encodeAttr(ride.source)} → ${encodeAttr(ride.destination)}</strong><br/>
+              Rider: ${encodeAttr(ride.riderName) || "Unknown"}<br/>
+              Mobile: ${encodeAttr(ride.riderMobile) || "Not provided"}<br/>
+              Vehicle: ${encodeAttr(ride.vehicleDetails) || "Not provided"}<br/>
+              Seats Available: ${ride.seatsAvailable ?? "N/A"}
+              <button class="btn btn-primary request-btn"
+                data-rideid="${encodeAttr(ride._id)}"
+                data-source="${encodeAttr(ride.source)}"
+                data-destination="${encodeAttr(ride.destination)}">Request Ride</button>
+            </li>`
+          ).join("");
+        } catch (e) {
+          matchList.innerHTML = "<li>Failed to fetch riders.</li>";
+        }
+      };
+
+      const sendRequest = async (rideId, source, destination) => {
+        try {
+          const payload = {
+            travelerName:  travelerNameEl.value.trim(),
+            travelerEmail: travelerEmailEl.value.trim(),
+            source:        travelerSourceEl.value.trim(),
+            destination:   travelerDestEl.value.trim()
+          };
+
+          // FIX: send JWT token
+          const res  = await fetch(`${API_BASE}/api/rides/${rideId}/request`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.message || "Failed to send request");
+
+          activeRideId    = rideId;
+          activeRequestId = data.request?._id || null;
+          requestStatus.textContent = "Request status: pending";
+
+          // PERSIST: save state so page refresh restores request tracking
+          localStorage.setItem("carpoolActiveRideId",    activeRideId);
+          localStorage.setItem("carpoolActiveRequestId", activeRequestId);
+          localStorage.setItem("carpoolTravelerSource",  travelerSourceEl.value.trim());
+          localStorage.setItem("carpoolTravelerDest",    travelerDestEl.value.trim());
+
+          socket?.emit("joinRide", rideId);
+
+          setMapMessage("Ride request sent. Showing route tracking.");
+          drawRouteMovement(source || travelerSourceEl.value.trim(), destination || travelerDestEl.value.trim());
+        } catch (e) {
+          setMapMessage(e.message || "Failed to send ride request.");
+        }
+      };
+
+      const pollRequestStatus = async () => {
+        if (!activeRideId || !activeRequestId) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/rides/${activeRideId}/requests`, { headers: authHeaders() });
+          if (!res.ok) return;  // guard against 401/403/500
+          const data = await res.json();
+          // Server filters to only this traveler's own request (by email from JWT)
+          const myReq = (data.requests || []).find((item) => item._id === activeRequestId);
+          if (!myReq) return;
+          requestStatus.textContent = `Request status: ${myReq.status}`;
+          if (myReq.status === "accepted") setMapMessage("Rider accepted your request. Tracking active ride.");
+          if (myReq.status === "rejected") setMapMessage("Rider rejected your request. Please choose another ride.");
+        } catch (e) { console.error(e); }
+      };
+
+      const initMap = () => {
+        map = L.map("routeMap", { zoomControl: true }).setView([OFFICE_LOCATION.lat, OFFICE_LOCATION.lng], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+        }).addTo(map);
+        officeMarker = L.marker([OFFICE_LOCATION.lat, OFFICE_LOCATION.lng]).addTo(map);
+        officeMarker.bindPopup("Corporate Office");
+        setMapMessage("Map ready.");
+        bindLiveLocationUpdates();
+      };
+
+      searchForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const source = travelerSourceEl.value.trim();
+        const dest   = travelerDestEl.value.trim();
+        if (!source || !dest) return;
+        // Clear stale status from a prior request before showing new results
+        requestStatus.textContent = "";
+        matchList.innerHTML = "<li>Searching…</li>";
+        await loadMatches(source, dest);
+      });
+
+      matchList.addEventListener("click", (e) => {
+        const target = e.target;
+        if (!target.classList.contains("request-btn")) return;
+        if (!map) { setMapMessage("Map still loading. Please wait."); return; }
+        sendRequest(target.dataset.rideid, target.dataset.source, target.dataset.destination);
+      });
+
+      document.getElementById("logoutBtn").addEventListener("click", () => {
+        localStorage.clear();
+        window.location.href = "login.html";
+      });
+
+      // Pre-fill email from localStorage
+      const storedEmail = localStorage.getItem("carpoolUserEmail");
+      if (storedEmail) travelerEmailEl.value = storedEmail;
+
+      const storedName = localStorage.getItem("carpoolUserName");
+      if (storedName) travelerNameEl.value = storedName;
+
+      // RESTORE: if traveler had an active request before refresh, restore tracking
+      const savedRideId     = localStorage.getItem("carpoolActiveRideId");
+      const savedRequestId  = localStorage.getItem("carpoolActiveRequestId");
+      const savedSrc        = localStorage.getItem("carpoolTravelerSource");
+      const savedDst        = localStorage.getItem("carpoolTravelerDest");
+
+      if (savedRideId && savedRequestId) {
+        activeRideId    = savedRideId;
+        activeRequestId = savedRequestId;
+        requestStatus.textContent = "Restored: checking request status...";
+        // Rejoin socket room to receive live GPS from the rider
+        socket?.emit("joinRide", activeRideId);
+        // Restore form fields so the traveler sees their route
+        if (savedSrc) travelerSourceEl.value = savedSrc;
+        if (savedDst) travelerDestEl.value   = savedDst;
+        // Redraw route on map after map is ready
+        if (savedSrc && savedDst) {
+          setTimeout(() => drawRouteMovement(savedSrc, savedDst), 600);
+        }
+      }
+
+      initMap();
+      setInterval(pollRequestStatus, 5000);
+    </script>
+  </body>
+</html>

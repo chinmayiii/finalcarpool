@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login - Corporate Carpool</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <p class="eyebrow">Welcome Back</p>
+      <h1>Login</h1>
+      <form id="loginForm" class="auth-form">
+        <input id="loginEmail" type="email" placeholder="Work Email" required />
+        <input id="loginPassword" type="password" placeholder="Password" required />
+        <select id="userRole" required>
+          <option value="">Select role</option>
+          <option value="rider">Rider (Driver)</option>
+          <option value="traveler">Traveler</option>
+        </select>
+        <button class="btn btn-primary" type="submit">Login</button>
+      </form>
+      <div id="googleLogin" class="auth-form" style="margin-top: 16px;">
+        <div id="googleBtn"></div>
+      </div>
+      <p id="loginStatus" class="map-message"></p>
+      <div class="inline-links">
+        <a href="register.html">Create Account</a>
+        <a href="index.html">Back Home</a>
+      </div>
+    </main>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+      const API_BASE = window.location.origin;
+      const form = document.getElementById("loginForm");
+      const roleSelect = document.getElementById("userRole");
+      const loginStatus = document.getElementById("loginStatus");
+      const googleWrap = document.getElementById("googleLogin");
+      const googleBtn = document.getElementById("googleBtn");
+
+      const params = new URLSearchParams(window.location.search);
+      const roleFromQuery = params.get("role");
+      if (roleFromQuery === "rider" || roleFromQuery === "traveler") {
+        roleSelect.value = roleFromQuery;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const selectedRole = roleSelect.value;
+        if (!selectedRole) {
+          loginStatus.textContent = "Please select role.";
+          return;
+        }
+
+        const email = document.getElementById("loginEmail").value.trim();
+        const password = document.getElementById("loginPassword").value;
+
+        try {
+          const response = await fetch(`${API_BASE}/api/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || "Login failed");
+          }
+
+          if (data.user?.role !== selectedRole) {
+            loginStatus.textContent = `Account role is ${data.user?.role || "unknown"}. Please select correct role.`;
+            return;
+          }
+          
+          localStorage.clear();
+          localStorage.setItem("carpoolToken", data.token || "");
+          localStorage.setItem("carpoolRole", selectedRole);
+          localStorage.setItem("carpoolUserEmail", data.user?.email || email);
+          localStorage.setItem("carpoolUserName", data.user?.name || "");
+          localStorage.setItem("carpoolUserMobile", data.user?.mobileNumber || "");
+          localStorage.setItem("carpoolVehicleNumber", data.user?.riderCredentials?.vehicleNumber || "");
+          localStorage.setItem("carpoolVehicleModel", data.user?.riderCredentials?.vehicleModel || "");
+
+          if (selectedRole === "rider") {
+            window.location.href = "rider.html";
+          } else {
+            window.location.href = "traveler.html";
+          }
+        } catch (error) {
+          loginStatus.textContent = error.message || "Login failed.";
+        }
+      });
+
+      const handleGoogleCredential = async (response) => {
+        // FIX: Google login works for all traveler users — no role selection needed
+        try {
+          const res = await fetch(`${API_BASE}/api/auth/google`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken: response.credential })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.message || "Google login failed");
+          }
+
+          localStorage.clear();
+          localStorage.setItem("carpoolToken", data.token || "");
+          localStorage.setItem("carpoolRole", data.user?.role || "traveler");
+          localStorage.setItem("carpoolUserEmail", data.user?.email || "");
+          localStorage.setItem("carpoolUserName", data.user?.name || "");
+          localStorage.setItem("carpoolUserMobile", data.user?.mobileNumber || "");
+
+          // FIX: new Google users get a prompt to complete their profile
+          if (data.isNewUser) {
+            loginStatus.textContent =
+              "Welcome! Your account was created. Please update your profile (mobile, company)."
+            loginStatus.style.color = "#0f6e56";
+          }
+
+          const role = data.user?.role;
+          setTimeout(() => {
+            if (role === "rider") {
+              window.location.href = "rider.html";
+            } else {
+              window.location.href = "traveler.html";
+            }
+          }, data.isNewUser ? 2000 : 0);
+        } catch (error) {
+          loginStatus.textContent = error.message || "Google login failed.";
+        }
+      };
+
+      const initGoogleLogin = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/config/google-client-id`);
+          const data = await res.json();
+          if (!data.clientId) {
+            googleWrap.style.display = "none";
+            return;
+          }
+
+          // FIX: GSI is loaded async — wait until google.accounts.id is available
+          const waitForGSI = (cb, attempts = 0) => {
+            if (window.google && window.google.accounts && window.google.accounts.id) {
+              cb();
+            } else if (attempts < 20) {
+              setTimeout(() => waitForGSI(cb, attempts + 1), 150);
+            } else {
+              // GSI never loaded (network block, ad-blocker etc.)
+              googleWrap.style.display = "none";
+            }
+          };
+
+          waitForGSI(() => {
+            google.accounts.id.initialize({
+              client_id: data.clientId,
+              callback: handleGoogleCredential
+            });
+            google.accounts.id.renderButton(googleBtn, {
+              theme: "outline",
+              size: "large",
+              text: "continue_with",
+              shape: "pill",
+              width: "300"
+            });
+          });
+        } catch (error) {
+          googleWrap.style.display = "none";
+        }
+      };
+
+      window.addEventListener("load", initGoogleLogin);
+    </script>
+  </body>
+</html>
