@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "comment": "Vercel hosts the static frontend. API + Socket.io are proxied to Railway.",
+  
 
   "buildCommand": null,
   "outputDirectory": "client",
