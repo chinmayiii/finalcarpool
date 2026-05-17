@@ -18,9 +18,9 @@
         { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "X-XSS-Protection", "value": "1; mode=block" },
         {
-  "key": "Content-Security-Policy",
-  "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' https://carpoolproduction.up.railway.app wss://carpoolproduction.up.railway.app https://accounts.google.com https://nominatim.openstreetmap.org https://router.project-osrm.org; frame-src https://accounts.google.com;"
-}
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com https://accounts.google.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' https://carpoolproduction.up.railway.app wss://carpoolproduction.up.railway.app https://accounts.google.com https://nominatim.openstreetmap.org https://router.project-osrm.org; frame-src https://accounts.google.com;"
+        }
       ]
     },
     {
