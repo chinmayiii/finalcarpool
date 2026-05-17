@@ -1,29 +1,22 @@
 {
   "version": 2,
-  
-
-  "buildCommand": null,
-  "outputDirectory": "client",
-  "installCommand": null,
-
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://carpoolproduction.up.railway.app/socket.io/:path*"
+      "destination": "https://carpoolproduction.up.railway.app/api/:path*"
     },
     {
       "source": "/socket.io/:path*",
       "destination": "https://carpoolproduction.up.railway.app/socket.io/:path*"
     }
   ],
-
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options",        "value": "DENY" },
-        { "key": "X-XSS-Protection",       "value": "1; mode=block" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-XSS-Protection", "value": "1; mode=block" },
         {
           "key": "Content-Security-Policy",
           "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' https://carpoolproduction.up.railway.app wss://carpoolproduction.up.railway.app https://nominatim.openstreetmap.org https://router.project-osrm.org; frame-src https://accounts.google.com;"
@@ -32,21 +25,15 @@
     },
     {
       "source": "/api/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache" }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-store, no-cache" }]
     },
     {
       "source": "/:file.html",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-cache, must-revalidate" }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
     },
     {
       "source": "/style.css",
-      "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=86400" }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }]
     }
   ]
 }
